@@ -3,6 +3,7 @@ import pandas as pd
 import re
 from datetime import datetime, timedelta
 import pytz
+import requests
 
 def extract_tables_from_docx(docx_file):
     doc = docx.Document(docx_file)
@@ -67,6 +68,53 @@ def extract_timestamp_and_step(df):
 
     return timestamps_and_steps
 
+def check_hyperlink_accessibility(url):
+    try:
+        response = requests.head(url, allow_redirects=True, timeout=5)
+        if response.status_code == 200:
+            return True
+        else:
+            return False
+    except requests.RequestException:
+        return False
+
+def check_screenshot_and_attachment(df):
+    step_column = df["Step #"]
+    test_procedure_column = df["Test Procedure"]
+    actual_result_column = df["Actual Result"]
+    results = []
+
+    for step, test_procedure, actual_result in zip(step_column, test_procedure_column, actual_result_column):
+        screenshot_present = "CAPTURE SCREENSHOT(S)" in test_procedure
+        attachment_present = "upload attachment" in actual_result.lower()
+        hyperlink_present = False
+        clickable_hyperlink = False
+        hyperlink_accessible = False
+        
+        if attachment_present:
+            # Find hyperlink following "upload attachment"
+            upload_attachment_index = actual_result.lower().find("upload attachment")
+            hyperlink_match = re.search(r"(http[s]?://\S+)", actual_result[upload_attachment_index:])
+            if hyperlink_match:
+                hyperlink_present = True
+                url = hyperlink_match.group(0)
+                # Check if the hyperlink is clickable
+                clickable_hyperlink = url.startswith(("http://", "https://"))
+                if clickable_hyperlink:
+                    hyperlink_accessible = check_hyperlink_accessibility(url)
+        
+        if attachment_present and hyperlink_present and clickable_hyperlink and hyperlink_accessible:
+            results.append(f"{step}-- has attachment with accessible clickable hyperlink.")
+        elif attachment_present and hyperlink_present and clickable_hyperlink and not hyperlink_accessible:
+            results.append(f"{step}-- has attachment with clickable hyperlink that is not accessible.")
+        elif attachment_present and (not hyperlink_present or not clickable_hyperlink):
+            results.append(f"{step}--  has 'upload attachment' but no clickable hyperlink.")
+        else:
+            results.append(f"{step}--  has no attachment.")
+
+    return results
+
+# Example usage
 docx_file = "Step.docx"
 tables = extract_tables_from_docx(docx_file)
 
@@ -78,4 +126,10 @@ for i, table in enumerate(tables):
             print(timestamp_and_step)
     else:
         print("No 'Executed By & Date' or 'Step #' column found.")
+    
+    if "Test Procedure" in table.columns and "Actual Result" in table.columns:
+        screenshot_and_attachment_results = check_screenshot_and_attachment(table)
+        for result in screenshot_and_attachment_results:
+            print(result)
+    
     print()
